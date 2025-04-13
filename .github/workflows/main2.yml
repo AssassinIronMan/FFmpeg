@@ -1,0 +1,78 @@
+name: Build FFmpeg with NVENC 1
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential nasm yasm cmake wget pkg-config
+
+    - name: Install CUDA Toolkit
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        wget https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda-repo-ubuntu2204-12-2-local_12.2.2-535.104.05-1_amd64.deb
+        sudo dpkg -i cuda-repo-ubuntu2204-12-2-local_12.2.2-535.104.05-1_amd64.deb
+        sudo cp /var/cuda-repo-ubuntu2204-12-2-local/cuda-*-keyring.gpg /usr/share/keyrings/
+        sudo apt-get update
+        sudo apt-get install -y cuda-toolkit-12-2
+        echo "PATH=$PATH:/usr/local/cuda/bin" >> $GITHUB_ENV
+
+    - name: Install NASM 2.16.01
+      run: |
+        wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.01/nasm-2.16.01.tar.gz
+        tar xzvf nasm-2.16.01.tar.gz
+        cd nasm-2.16.01
+        ./configure && make -j$(nproc) && sudo make install
+
+    - name: Install NVIDIA Codec Headers
+      run: |
+        git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+        cd nv-codec-headers
+        git checkout sdk/12.2
+        sudo make install PREFIX=/usr/local
+
+    - name: Build FFmpeg with NVENC Support
+      run: |
+        git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+        cd ffmpeg
+        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
+        ./configure \
+          --enable-static \
+          --disable-shared \
+          --enable-nonfree \
+          --enable-cuda-nvcc \
+          --enable-libnpp \
+          --enable-nvenc \
+          --enable-nvdec \
+          --extra-cflags="-I/usr/local/cuda/include -I/usr/local/include" \
+          --extra-ldflags="-L/usr/local/cuda/lib64 -L/usr/local/lib" \
+          --nvccflags="-gencode arch=compute_75,code=sm_75" \
+          --pkg-config-flags="--static"
+        make -j$(nproc)
+
+    - name: Package Binary
+      run: |
+        mkdir -p ffmpeg-build
+        make install DESTDIR=./ffmpeg-build
+        tar czvf ffmpeg-nvenc.tar.gz -C ffmpeg-build/usr/local/bin ffmpeg
+
+    - name: Upload to GitHub Releases
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ffmpeg-nvenc.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
