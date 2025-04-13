@@ -1,1 +1,65 @@
+name: Build FFmpeg with NVENC
 
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      PAT: ${{ secrets.FFMPEG_PAT }}
+      
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential nasm yasm cmake
+        
+    - name: Install CUDA 12.2
+      run: |
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+        sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        wget https://developer.download.nvidia.com/compute/cuda/12.2.2/local_installers/cuda-repo-ubuntu2204-12-2-local_12.2.2-535.104.05-1_amd64.deb
+        sudo dpkg -i cuda-repo-ubuntu2204-12-2-local_12.2.2-535.104.05-1_amd64.deb
+        sudo cp /var/cuda-repo-ubuntu2204-12-2-local/cuda-*-keyring.gpg /usr/share/keyrings/
+        sudo apt-get update
+        sudo apt-get -y install cuda-toolkit-12-2
+
+    - name: Clone FFmpeg
+      run: |
+        git clone https://${{ secrets.FFMPEG_PAT }}@github.com/FFmpeg/FFmpeg.git
+
+    - name: Configure and Build
+      run: |
+        cd FFmpeg
+        ./configure \
+          --enable-static \
+          --disable-shared \
+          --enable-nonfree \
+          --enable-cuda-nvcc \
+          --enable-libnpp \
+          --enable-nvenc \
+          --enable-nvdec \
+          --extra-cflags="-I/usr/local/cuda/include" \
+          --extra-ldflags="-L/usr/local/cuda/lib64" \
+          --prefix=./build
+        make -j$(nproc)
+        make install
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          FFmpeg/build/bin/ffmpeg
+          FFmpeg/build/bin/ffprobe
+        tag_name: v1.0-nvenc
+        body: | 
+          Precompiled FFmpeg with NVENC support
+          CUDA 12.2 | NVENC API 12.2
+          
